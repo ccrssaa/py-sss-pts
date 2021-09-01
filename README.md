@@ -9,6 +9,8 @@ Tested with:
 - nvme version 1.10
 - fio 3.23
 
+Currently NVMe only (tested with Samsung SSD 970 EVO Plus 500GB)
+
 Obviously all utilities mentioned above must be installed
 
 Sudo must be configured to allow lspci, lshw, nvme, fio without password:
