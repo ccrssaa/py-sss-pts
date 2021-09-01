@@ -16,6 +16,8 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 """
+
+import argparse
 import logging
 import sys
 import os
@@ -34,20 +36,6 @@ from scipy import stats
 # - keep journal
 # - keep original files for later processing
 # - lightweight, "entities should not be multiplied beyond necessity"
-
-#
-# Performance Test Specification (PTS) is a revision to, and consolidation of,
-# the Enterprise Performance Test Specification (PTS-E) v1.1
-# and the SNIA Solid State Storage Client Performance Test Specification (PTS-C)
-#
-
-import enum
-
-
-class PTS_Mode(enum.Enum):
-    PTS_C = enum.auto()
-    PTS_E = enum.auto()
-
 
 # ======================================================================
 # low-level read(), write(), mkdir(), subprocess.run() wrappers
@@ -437,6 +425,7 @@ WIPC_JOB_TPL = """
     numjobs={{ thread_count }}
     size={{ size }}
     io_size={{ io_size }}
+
 """
 
 WDPC_IOPS_JOB_TPL = """
@@ -460,7 +449,7 @@ WDPC_IOPS_JOB_TPL = """
 
     [wdpc-rr{{ read_rate }}-{{ block_size }}]
     stonewall
-    runtime=1m
+    runtime={{ runtime }}
     time_based
     rwmixread={{ read_rate }}
     bs={{ block_size }}
@@ -538,24 +527,32 @@ def in_steady_state(values, window_size):
 # ======================================================================
 
 
-def iops(dev, mode):
+def iops(args):
     """IOPS test"""
 
     MEASUREMENT_WINDOW = 5
 
     # record test conditions
-    save_stdout_stderr("platform/lshw", run_lshw())
-    save_stdout_stderr("platform/lspci", run_lspci())
-    save_stdout_stderr("device/nvme-id-ctrl", run_nvme_id_ctrl(dev))
-    save_stdout_stderr("device/nvme-smart-log", run_nvme_smart_log(dev))
-    save_dict("settings/nvme-module-config", get_nvme_module_info())
-    save_dict("settings/nvme-features", get_nvme_features(dev))
-    save_dict("settings/queue", get_queue_info(dev))
+    save_stdout_stderr(os.path.join(args.output, "platform/lshw"), run_lshw())
+    save_stdout_stderr(os.path.join(args.output, "platform/lspci"), run_lspci())
+    save_stdout_stderr(
+        os.path.join(args.output, "device/nvme-id-ctrl"), run_nvme_id_ctrl(args.dev)
+    )
+    save_stdout_stderr(
+        os.path.join(args.output, "device/nvme-smart-log"), run_nvme_smart_log(args.dev)
+    )
+    save_dict(
+        os.path.join(args.output, "settings/nvme-module-config"), get_nvme_module_info()
+    )
+    save_dict(
+        os.path.join(args.output, "settings/nvme-features"), get_nvme_features(args.dev)
+    )
+    save_dict(os.path.join(args.output, "settings/queue"), get_queue_info(args.dev))
 
     # use nvme list to get device PhysicalSize
     nvme_list_result = run_nvme_list()
-    save_stdout_stderr("device/nvme-list", nvme_list_result)
-    ns = get_nvme_namespace(nvme_list_result.stdout.decode("utf-8"), dev)
+    save_stdout_stderr(os.path.join(args.output, "device/nvme-list"), nvme_list_result)
+    ns = get_nvme_namespace(nvme_list_result.stdout.decode("utf-8"), args.dev)
     # align size to kbytes for direct i/o
     physical_size = int(ns["PhysicalSize"] / 1024)
 
@@ -565,7 +562,12 @@ def iops(dev, mode):
     # applicable to Purge step; any values can be used and none need to be
     # reported.)
 
-    save_stdout_stderr("purge/nvme-format", run_nvme_format(dev))
+    if not args.test:
+        save_stdout_stderr(
+            os.path.join(args.output, "purge/nvme-format"), run_nvme_format(args.dev)
+        )
+    else:
+        logging.info("Test mode, skipped nvme format on {:s}".format(args.dev))
 
     # 2 Run Workload Independent Pre-conditioning
     # 2.1 Set and record test conditions:
@@ -575,27 +577,36 @@ def iops(dev, mode):
     # 2.1.3 Thread Count (TC): Test Operator Choice (recommended PTS-E TC=4;
     #       PTS-C TC=2)
 
-    if mode == PTS_Mode.PTS_E:
+    if args.mode == "PTS-E":
         logging.info("PTS-E (enterprise) mode")
         # write cache disabled for enterprise devices
         save_stdout_stderr(
-            "pre-conditioning/nvme-set-feature", run_nvme_set_feature(dev, 0x06, 0)
+            os.path.join(args.output, "pre-conditioning/nvme-set-feature"),
+            run_nvme_set_feature(args.dev, 0x06, 0),
         )
         active_range = physical_size
         queue_depth = 32
         thread_count = 4
-    elif mode == PTS_Mode.PTS_C:
+    elif args.mode == "PTS-C":
         logging.info("PTS-C (client) mode")
         # write cache enabled for client devices
         save_stdout_stderr(
-            "pre-conditioning/nvme-set-feature", run_nvme_set_feature(dev, 0x06, 1)
+            os.path.join(args.output, "pre-conditioning/nvme-set-feature"),
+            run_nvme_set_feature(args.dev, 0x06, 1),
         )
         active_range = int(0.75 * physical_size)
         queue_depth = 16
         thread_count = 2
     else:
-        logging.error("Unknown PTS mode: {}".format(mode))
+        logging.error("Unknown PTS mode: {}".format(args.mode))
         sys.exit(1)
+
+    # for development purposes only
+    if args.test:
+        runtime = "10s"
+        logging.info("Test mode, set runtime to {:s}".format(runtime))
+    else:
+        runtime = "1m"
 
     # 2.1.4 Data Pattern: Required = Random, Optional = Test Operator
     seed = 0xDEADBEEF
@@ -613,14 +624,18 @@ def iops(dev, mode):
     # workload-independent pre-conditioning
     job = render(
         WIPC_JOB_TPL,
-        device=dev,
+        device=args.dev,
         queue_depth=queue_depth,
         thread_count=thread_count,
         seed=seed,
         size=size,
         io_size=io_size,
     )
-    run_and_save_fio("pre-conditioning/wipc", job)
+    if args.test:
+        logging.info("Test mode, skipped WIPC on {:s}".format(args.dev))
+    else:
+        logging.info("run WIPC on {:s}".format(args.dev))
+        run_and_save_fio(os.path.join(args.output, "pre-conditioning/wipc"), job)
 
     # 3 Run Workload Dependent Pre-conditioning and Test stimulus. Set test
     #   parameters and record for later reporting
@@ -653,29 +668,49 @@ def iops(dev, mode):
 
                 # device temperature before run
                 save_stdout_stderr(
-                    "round-{:d}/rr-{:d}/bs-{:s}/smart-before".format(round_num, rr, bs),
-                    run_nvme_smart_log(dev),
+                    os.path.join(
+                        args.output,
+                        "round-{:d}".format(round_num),
+                        "rr-{:d}".format(rr),
+                        "bs-{:s}".format(bs),
+                        "smart-before",
+                    ),
+                    run_nvme_smart_log(args.dev),
                 )
 
                 # run fio with single job in a file
                 job = render(
                     WDPC_IOPS_JOB_TPL,
-                    device=dev,
+                    device=args.dev,
                     queue_depth=queue_depth,
                     thread_count=thread_count,
                     seed=seed,
                     size=size,
                     read_rate=rr,
                     block_size=bs,
+                    runtime=runtime,
                 )
                 fio_result = run_and_save_fio(
-                    "round-{:d}/rr-{:d}/bs-{:s}/wdpc".format(round_num, rr, bs), job
+                    os.path.join(
+                        args.output,
+                        "round-{:d}".format(round_num),
+                        "rr-{:d}".format(rr),
+                        "bs-{:s}".format(bs),
+                        "wdpc",
+                    ),
+                    job,
                 )
 
                 # device temperature after run
                 save_stdout_stderr(
-                    "round-{:d}/rr-{:d}/bs-{:s}/smart-after".format(round_num, rr, bs),
-                    run_nvme_smart_log(dev),
+                    os.path.join(
+                        args.output,
+                        "round-{:d}".format(round_num),
+                        "rr-{:d}".format(rr),
+                        "bs-{:s}".format(bs),
+                        "smart-after",
+                    ),
+                    run_nvme_smart_log(args.dev),
                 )
 
                 # single job per fio run, job data available as first element of fio_result['jobs'] list
@@ -737,7 +772,36 @@ def main():
     logging.basicConfig(
         format="%(filename)s:%(lineno)d %(funcName)s(): %(message)s", level=logging.INFO
     )
-    iops("/dev/nvme0n1", PTS_Mode.PTS_C)
+
+    parser = argparse.ArgumentParser(
+        description="Implementation of SNIA Solid State Storage (SSS) Performance Test Specification (PTS)"
+    )
+
+    parser.add_argument("dev", type=str, help="Device to test")
+    parser.add_argument(
+        "-t",
+        "--test",
+        action="store_true",
+        help="For development purposes only: skip device purge, skip WIPC, set runtime to 10s",
+    )
+    parser.add_argument(
+        "-m",
+        "--mode",
+        default="PTS-C",
+        type=str,
+        choices=["PTS-C", "PTS-E"],
+        help="Test mode: PTS-C (Client) or PTS-E (Enterprise)",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        default=".",
+        type=str,
+        help="Output directory",
+    )
+    args = parser.parse_args()
+    create_dir(args.output)
+    iops(args)
 
 
 if __name__ == "__main__":
