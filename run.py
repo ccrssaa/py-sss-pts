@@ -715,11 +715,10 @@ def iops(args):
 
                 # single job per fio run, job data available as first element of fio_result['jobs'] list
                 # mean iops = p1 * read iops + p2 * write iops, where p1=rr, p2=1-rr
-                iops = (rr / 100.0) * fio_result["jobs"][0]["read"]["iops"] + (
-                    1 - rr / 100.0
-                ) * fio_result["jobs"][0]["write"]["iops"]
+                iops = (rr / 100.0) * fio_result["jobs"][0]["read"]["iops"]
+                iops += (1 - rr / 100.0) * fio_result["jobs"][0]["write"]["iops"]
                 logging.info(
-                    "fio finished: round={:d} rr={:d} bs={:s} iops={:f}".format(
+                    "round={:d} rr={:d} bs={:s} iops={:f}".format(
                         round_num, rr, bs, iops
                     )
                 )
