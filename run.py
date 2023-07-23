@@ -25,9 +25,8 @@ import subprocess
 import json
 import re
 
-import jinja2
 import textwrap
-import itertools
+import jinja2
 
 import numpy as np
 from scipy import stats
@@ -67,7 +66,10 @@ def read_file(dirname, filename):
 
 
 def create_dir(dirname):
-    """create directory with all intermediate-level directories needed to contain the leaf directory if necessary"""
+    """
+    create directory with all intermediate-level directories
+    needed to contain the leaf directory if necessary
+    """
     try:
         if not os.path.exists(dirname):
             logging.debug("create directory {:s}".format(dirname))
@@ -287,7 +289,6 @@ def get_nvme_features(dev):
     )
     result = list()
     for fid in FIDS:
-
         r = run_nvme_get_feature(dev, fid)
         lines = r.stdout.decode("utf8").splitlines()
 
@@ -460,12 +461,16 @@ WDPC_IOPS_JOB_TPL = """
 # steady state
 # SSS_PTS_2.0.2.pdf page 17
 #
-# 2.1.24 Steady State: A device is said to be in Steady State when, for the dependent variable (y) being tracked:
+# 2.1.24 Steady State: A device is said to be in Steady State when,
+# for the dependent variable (y) being tracked:
 # a) Range(y) is less than 20% of Ave(y):
-#    Max(y)-Min(y) within the Measurement Window is no more than 20% of the Ave(y) within the Measurement Window; and
+#    Max(y)-Min(y) within the Measurement Window is no more than 20%
+#    of the Ave(y) within the Measurement Window; and
 # b) Slope(y) is less than 10%:
-#    Max(y)-Min(y), where Max(y) and Min(y) are the maximum and minimum values on the best linear curve fit
-#    of the y-values within the Measurement Window, is within 10% of Ave(y) value within the Measurement Window.
+#    Max(y)-Min(y), where Max(y) and Min(y) are the maximum and minimum
+#    values on the best linear curve fit of the y-values within the
+#    Measurement Window, is within 10% of Ave(y) value within the
+#    Measurement Window.
 # ======================================================================
 
 
@@ -485,7 +490,8 @@ def in_steady_state(values, window_size):
     yrange = max(yvalues) - min(yvalues)
     logging.info("yavg = {:f}, yrange = {:f}".format(yavg, yrange))
 
-    # Max(y)-Min(y) within the Measurement Window is no more than 20% of the Ave(y) within the Measurement Window
+    # Max(y)-Min(y) within the Measurement Window is no more than 20%
+    # of the Ave(y) within the Measurement Window
     if yrange >= 0.2 * yavg:
         logging.info(
             "a) failed, {:f} >= 0.2 * {:f} ({:f})".format(yrange, yavg, 0.2 * yavg)
@@ -527,7 +533,7 @@ def in_steady_state(values, window_size):
 # ======================================================================
 
 
-def iops(args):
+def run_iops(args):
     """IOPS test"""
 
     MEASUREMENT_WINDOW = 5
@@ -657,7 +663,6 @@ def iops(args):
     # 3.2 Run the following test loop until Steady State (SS) is reached, or maximum of 25 Rounds:
     # 'round' is a keyword, use round_num instead
     for round_num in range(1, 26):
-
         # 3.2.1 For (R/W Mix % = 100/0, 95/5, 65/35, 50/50, 35/65, 5/95, 0/100)
         # 3.2.1.1 For (Block Size = 1024KiB, 128KiB, 64KiB, 32KiB, 16KiB, 8KiB, 4KiB, 0.5KiB)
         # 3.2.1.2 Execute RND IO, per (R/W Mix %, Block Size), for 1 minute
@@ -665,7 +670,6 @@ def iops(args):
         # 7 * 8 * 1m = 56m each run
         for rr in 100, 95, 65, 50, 35, 5, 0:
             for bs in "1024k", "128k", "64k", "32k", "16k", "8k", "4k", "512b":
-
                 # device temperature before run
                 save_stdout_stderr(
                     os.path.join(
@@ -713,7 +717,9 @@ def iops(args):
                     run_nvme_smart_log(args.dev),
                 )
 
-                # single job per fio run, job data available as first element of fio_result['jobs'] list
+                # single job per fio run, job data available
+                # as first element of fio_result['jobs'] list
+                #
                 # mean iops = p1 * read iops + p2 * write iops, where p1=rr, p2=1-rr
                 iops = (rr / 100.0) * fio_result["jobs"][0]["read"]["iops"]
                 iops += (1 - rr / 100.0) * fio_result["jobs"][0]["write"]["iops"]
@@ -763,6 +769,17 @@ def iops(args):
 
 
 # ======================================================================
+# Throughput (TP) test
+# SSS_PTS_2.0.2.pdf page 35
+# ======================================================================
+
+
+def run_tp(args):
+    """Throughput test"""
+    pass
+
+
+# ======================================================================
 # main
 # ======================================================================
 
@@ -776,6 +793,9 @@ def main():
         description="Implementation of SNIA Solid State Storage (SSS) Performance Test Specification (PTS)"
     )
 
+    parser.add_argument(
+        "testname", type=str, choices=["iops", "tp"], help="Name of the test"
+    )
     parser.add_argument("dev", type=str, help="Device to test")
     parser.add_argument(
         "-t",
@@ -800,7 +820,7 @@ def main():
     )
     args = parser.parse_args()
     create_dir(args.output)
-    iops(args)
+    run_iops(args)
 
 
 if __name__ == "__main__":
